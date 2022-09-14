@@ -1,5 +1,11 @@
 {
     "files.associations": {
-        "user.h": "c"
+        "user.h": "c",
+        "types.h": "c",
+        "stat.h": "c",
+        "atomic": "c",
+        "*.tcc": "c",
+        "fstream": "c",
+        "sstream": "c"
     }
 }
