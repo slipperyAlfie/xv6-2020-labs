@@ -293,6 +293,8 @@ fork(void)
 
   pid = np->pid;
 
+  np->sys_mask = p->sys_mask;
+
   np->state = RUNNABLE;
 
   release(&np->lock);
@@ -692,4 +694,30 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64 freeproc_info(){
+  uint64 freeproc = 0;
+  struct proc* p;
+  for(p = proc ; p < &proc[NPROC] ; p++){
+    acquire(&p->lock);
+    if(p->state == UNUSED)
+      freeproc++;
+    release(&p->lock);
+  }
+  //printf("%d : %d\n",myproc()->pid,freeproc);
+  return freeproc;
+}
+
+uint64 freefd_info(){
+  uint64 freefd = 0;
+  for(int i = 0 ; i < NPROC ; i++){
+    acquire(&proc[i].lock);
+    for(int j = 0 ; j < NOFILE ; j++){
+      if(proc[i].ofile[j] == 0)
+        freefd++;
+    }
+    release(&proc[i].lock);
+  }
+  return freefd;
 }
