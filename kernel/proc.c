@@ -6,6 +6,10 @@
 #include "proc.h"
 #include "defs.h"
 
+extern pagetable_t kernel_pagetable;
+
+extern char etext[];  // kernel.ld sets this to end of kernel code.
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -37,6 +41,7 @@ procinit(void)
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
+      p->kstack_pa = (uint64)pa;
       uint64 va = KSTACK((int) (p - proc));
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
       p->kstack = va;
@@ -85,6 +90,72 @@ allocpid() {
   return pid;
 }
 
+// add a mapping to per-process kernel page table.
+void
+proc_kvmmap(pagetable_t k_pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  //vmprint(k_pagetable);
+  if(mappages(k_pagetable, va, sz, pa, perm) != 0)
+    panic("proc kvmmap");
+}
+
+/*
+ * create per-process kernel pagetable.
+ */
+pagetable_t
+proc_kvminit()
+{
+  pagetable_t k_pagetable = (pagetable_t) kalloc();
+  memset(k_pagetable, 0, PGSIZE);
+
+  // uart registers
+  proc_kvmmap(k_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  proc_kvmmap(k_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  proc_kvmmap(k_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  proc_kvmmap(k_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  proc_kvmmap(k_pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  proc_kvmmap(k_pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  proc_kvmmap(k_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return k_pagetable;
+}
+
+// copy user pgtbl to per-process kernel pgtbl
+void
+proc_u2kvmcopy(pagetable_t k_pgtbl, pagetable_t u_pgtbl, uint64 old_sz, uint64 new_sz)
+{
+  pte_t *pte_from, *pte_to;
+  uint64 pa, i;
+  uint flags;
+
+  if(new_sz < old_sz)
+    return;
+
+  old_sz = PGROUNDUP(old_sz);
+  for(i = old_sz; i < new_sz; i += PGSIZE){
+    if((pte_from = walk(u_pgtbl,i,0)) == 0)
+      panic("u2kvmcopy: u_pte should exist");
+    if((pte_to = walk(k_pgtbl,i,1)) == 0)
+      panic("u2kvmcopy: walk fail");
+    pa = PTE2PA(*pte_from);
+    flags = PTE_FLAGS(*pte_from) & (~PTE_U);
+    *pte_to = PA2PTE(pa) | flags;
+  }
+}
+
 // Look in the process table for an UNUSED proc.
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
@@ -121,6 +192,15 @@ found:
     return 0;
   }
 
+  // per-process kernel page table.
+  p->k_pagetable = proc_kvminit();
+  if(p->k_pagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  proc_kvmmap(p->k_pagetable,p->kstack,p->kstack_pa,PGSIZE,PTE_R | PTE_W);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -141,6 +221,25 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->k_pagetable){
+    //vmprint(p->k_pagetable);
+    for(int i = 0 ; i < 512 ; i++){
+      pte_t top_pte = p->k_pagetable[i];
+      if(top_pte & PTE_V){
+        pagetable_t second_pagetable = (pagetable_t)(PTE2PA(top_pte));
+        for(int j = 0 ; j < 512 ; j++){
+          pte_t sec_pte = second_pagetable[j];
+          if(sec_pte & PTE_V){
+            pagetable_t last_pagetable = (pagetable_t)(PTE2PA(sec_pte));
+            kfree((void*)last_pagetable);
+          }
+        }
+        kfree((void*)second_pagetable);
+      }
+    }
+    kfree(p->k_pagetable);
+    p->k_pagetable = 0;
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -225,6 +324,8 @@ userinit(void)
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
+  proc_u2kvmcopy(p->k_pagetable,p->pagetable,0,p->sz);
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
@@ -243,9 +344,12 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    if(PGROUNDUP(sz + n) >= PLIC)
+      return -1;
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    proc_u2kvmcopy(p->k_pagetable,p->pagetable,sz-n,sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
@@ -288,6 +392,8 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  proc_u2kvmcopy(np->k_pagetable,np->pagetable,0,np->sz);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -471,9 +577,13 @@ scheduler(void)
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+        
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
+        
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
@@ -485,6 +595,10 @@ scheduler(void)
     }
 #if !defined (LAB_FS)
     if(found == 0) {
+      
+      w_satp(MAKE_SATP(kernel_pagetable));
+      sfence_vma();
+      
       intr_on();
       asm volatile("wfi");
     }
@@ -662,7 +776,7 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
 {
   struct proc *p = myproc();
   if(user_src){
-    return copyin(p->pagetable, dst, src, len);
+    return copyin_new(p->pagetable, dst, src, len);
   } else {
     memmove(dst, (char*)src, len);
     return 0;

@@ -450,3 +450,39 @@ test_pagetable()
   uint64 gsatp = MAKE_SATP(kernel_pagetable);
   return satp != gsatp;
 }
+
+void level_print(pagetable_t pagetable, int level){
+  if(level == 2){
+    for(int i = 0 ; i < 512 ; i++){
+      pte_t pte = pagetable[i];
+      if(pte & PTE_V){
+        printf("||%d: pte %p pa %p\n",i,pte,PTE2PA(pte));
+        level_print((pagetable_t)(PTE2PA(pte)),1);
+      }
+    }
+  }
+  else if(level == 1){
+    for(int i = 0 ; i < 512 ; i++){
+      pte_t pte = pagetable[i];
+      if(pte & PTE_V){
+        printf("|| ||%d: pte %p pa %p\n",i,pte,PTE2PA(pte));
+        level_print((pagetable_t)(PTE2PA(pte)),0);
+      }
+    }
+  }
+  else{
+    for(int i = 0 ; i < 512 ; i++){
+      pte_t pte = pagetable[i];
+      if(pte & PTE_V){
+        printf("|| || ||%d: pte %p pa %p\n",i,pte,PTE2PA(pte));
+      }
+    }
+  }
+  return;
+}
+
+int vmprint(pagetable_t pagetable){
+  printf("page table %p\n",pagetable);
+  level_print(pagetable,2);
+  return 0;
+}

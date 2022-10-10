@@ -34,7 +34,7 @@ main()
 #ifdef LAB_NET
     pci_init();
     sockinit();
-#endif    
+#endif
     userinit();      // first user process
     __sync_synchronize();
     started = 1;
