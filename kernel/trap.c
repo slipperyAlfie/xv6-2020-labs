@@ -67,6 +67,23 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15){
+    // page fault
+    //printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    //printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    char* mem = kalloc();
+    uint64 va = PGROUNDDOWN(r_stval());
+    if(mem == 0){
+      printf("page fault: no space");
+      p->killed = 1;
+    }
+    memset(mem,0,PGSIZE);
+    if(mappages(p->pagetable,va,PGSIZE,(uint64)mem,PTE_W|PTE_X|PTE_R|PTE_U|PTE_V) != 0){
+      printf("page fault: mappages");
+      p->killed = 1;
+    }
+
+    intr_on();
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
