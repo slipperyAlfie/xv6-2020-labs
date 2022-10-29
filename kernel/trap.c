@@ -71,16 +71,24 @@ usertrap(void)
     // page fault
     //printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     //printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    if(r_stval() >= p->sz || r_stval() < p->trapframe->sp){
+      p->killed = 1;
+      goto killed;
+    }
+      
     char* mem = kalloc();
     uint64 va = PGROUNDDOWN(r_stval());
     if(mem == 0){
-      printf("page fault: no space");
+      printf("trap: page fault: no space\n");
       p->killed = 1;
+      goto killed;
     }
     memset(mem,0,PGSIZE);
-    if(mappages(p->pagetable,va,PGSIZE,(uint64)mem,PTE_W|PTE_X|PTE_R|PTE_U|PTE_V) != 0){
-      printf("page fault: mappages");
+    if(mappages(p->pagetable,va,PGSIZE,(uint64)mem,PTE_X|PTE_W|PTE_R|PTE_U|PTE_V) != 0){
+      printf("page fault: mappages\n");
+      kfree((void*)mem);
       p->killed = 1;
+      goto killed;
     }
 
     intr_on();
@@ -90,6 +98,7 @@ usertrap(void)
     p->killed = 1;
   }
 
+killed:
   if(p->killed)
     exit(-1);
 
