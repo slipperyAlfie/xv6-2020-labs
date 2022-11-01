@@ -26,13 +26,8 @@ struct {
 void
 kinit()
 {
-  char name[7] = "kmem";
-  name[6] = 0;
   for(int i = 0 ; i < NCPU ; i++){
-    name[4] = (i / 10) + '0';
-    name[5] = (i % 10) + '0';
-    initlock(&kmem[i].lock, name);
-    printf("lock %d: %s\n",i,kmem[i].lock.name);
+    initlock(&kmem[i].lock, "kmem");
   }
   freerange(end, (void*)PHYSTOP);
 }
@@ -54,11 +49,9 @@ void
 kfree(void *pa)
 {
   struct run *r;
-  /*
   push_off();
   int cpuID = cpuid();
   pop_off();
-  */
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP){
     if(((uint64)pa % PGSIZE) != 0)
@@ -73,9 +66,6 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-  push_off();
-  int cpuID = cpuid();
-  pop_off();
 
   acquire(&kmem[cpuID].lock);
   r->next = kmem[cpuID].freelist;
@@ -89,60 +79,36 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
- struct run *r;
- push_off();
- int cpu_id = cpuid();
- pop_off();
+  struct run *r;
 
+  push_off();
+  int cpuID = cpuid();
+  pop_off();
 
- acquire(&kmem[cpu_id].lock);
+  acquire(&kmem[cpuID].lock);
+  r = kmem[cpuID].freelist;
+  if(r){
+    kmem[cpuID].freelist = r->next;
+  }
+  else{
+    for(int i = 0 ; i < NCPU ; i++){
+      if(i != cpuID){
+        acquire(&kmem[i].lock);
+        r = kmem[i].freelist;
+        if(r){
+          kmem[i].freelist = r->next;
+          release(&kmem[i].lock);
+          break;
+        }
+        else{
+          release(&kmem[i].lock);
+        }
+      }
+    }
+  }
+  release(&kmem[cpuID].lock);
 
- r = kmem[cpu_id].freelist;
- if(r){
- kmem[cpu_id].freelist = r->next;
- 
- }else{
- int i;
- int success = 0;
- for(i=0;i<NCPU;i++){
-
-if(i == cpu_id) {
-
-continue;
- }
-
- acquire(&kmem[i].lock);
-
- struct run *p = kmem[i].freelist;
-
- if(p){
- struct run *pre = p;
- if(p->next) {
-p = p->next;
- }
- kmem[i].freelist = p->next;
- p->next = kmem[cpu_id].freelist;
-
- if(p!=pre){ //freelist不止一份
- kmem[cpu_id].freelist = pre;
- }else{ //freelist只有一份
- kmem[cpu_id].freelist = p;
- }
-
-success=1;
-}
-release(&kmem[i].lock);
-
-if(success){
- r = kmem[cpu_id].freelist;
- kmem[cpu_id].freelist = r->next;
- break;
-}
-}
-}
-
-release(&kmem[cpu_id].lock);
-
-if(r) memset((char*)r, 5, PGSIZE); // fill with junk
- return (void*)r;
+  if(r)
+    memset((char*)r, 5, PGSIZE); // fill with junk
+  return (void*)r;
 }
