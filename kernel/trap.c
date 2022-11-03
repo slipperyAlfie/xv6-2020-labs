@@ -11,7 +11,7 @@ uint ticks;
 
 extern char trampoline[], uservec[], userret[];
 
-// in kernelvec.S, calls kerneltrap().
+// in kernelvec.S, calls kerneltrap.
 void kernelvec();
 
 extern int devintr();
@@ -41,7 +41,7 @@ usertrap(void)
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
+  // send interrupts and exceptions to kerneltrap,
   // since we're now in the kernel.
   w_stvec((uint64)kernelvec);
 
@@ -77,8 +77,30 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){
+    if(p->alarm > 0){
+      p->cur_ticks++;
+      //printf("p->cur:%d, p->alarm:%d\n",p->cur_ticks,p->alarm);
+      if(p->cur_ticks >= p->alarm && p->return_flag){
+        //p->trapframe->ra = p->trapframe->epc;
+        p->epc = p->trapframe->epc;
+        p->sp = p->trapframe->sp;
+        p->s0 = p->trapframe->s0;
+        p->s1 = p->trapframe->s1;
+        p->ra = p->trapframe->ra;
+        p->a5 = p->trapframe->a5;
+        p->a4 = p->trapframe->a4;
+        p->a3 = p->trapframe->a3;
+        p->a1 = p->trapframe->a1;
+        p->a0 = p->trapframe->a0;
+        p->return_flag = 0;
+        
+        p->trapframe->epc = p->handler;
+        p->cur_ticks = 0;
+      }
+    }
     yield();
+  }
 
   usertrapret();
 }
@@ -92,8 +114,8 @@ usertrapret(void)
   struct proc *p = myproc();
 
   // we're about to switch the destination of traps from
-  // kerneltrap() to usertrap(), so turn off interrupts until
-  // we're back in user space, where usertrap() is correct.
+  // kerneltrap to usertrap, so turn off interrupts until
+  // we're back in user space, where usertrap is correct.
   intr_off();
 
   // send syscalls, interrupts, and exceptions to trampoline.S

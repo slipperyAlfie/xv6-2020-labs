@@ -57,6 +57,7 @@ sys_sleep(void)
 {
   int n;
   uint ticks0;
+  backtrace();
 
   if(argint(0, &n) < 0)
     return -1;
@@ -94,4 +95,38 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_sigalarm(void)
+{
+  int alarm;
+  uint64 handler;
+  if(argint(0,&alarm) < 0)
+    return -1;
+  if(argaddr(1,&handler) < 0)
+    return -1;
+  myproc()->alarm = alarm;
+  myproc()->handler = handler;
+  myproc()->return_flag = 1;
+  //printf("sigalarm finished: %d, %p\n",alarm,handler);
+  return 0;
+}
+
+uint64
+sys_sigreturn(void)
+{
+  myproc()->trapframe->epc = myproc()->epc;
+  myproc()->trapframe->sp = myproc()->sp;
+  myproc()->trapframe->s0 = myproc()->s0;
+  myproc()->trapframe->s1 = myproc()->s1;
+  myproc()->trapframe->ra = myproc()->ra;
+  myproc()->trapframe->a5 = myproc()->a5;
+  myproc()->trapframe->a4 = myproc()->a4;
+  myproc()->trapframe->a3 = myproc()->a3;
+  myproc()->trapframe->a1 = myproc()->a1;
+  myproc()->trapframe->a0 = myproc()->a0;
+  myproc()->return_flag = 1;
+  
+  return 0;
 }
