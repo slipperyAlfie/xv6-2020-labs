@@ -67,12 +67,47 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15){
+    // page fault
+    uint64 pa = 0, va = r_stval();
+    // wrong va
+    if(va >= p->sz){
+      //printf("%p  %p\n",va,p->sz);
+      //printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      //printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+      goto kill;
+    }
+    void* mem;
+    // out of mem, kill the process
+    if((mem = kalloc()) == 0){
+      //printf("trap: out of mem!\n");
+      p->killed = 1;
+      goto kill;
+    }
+    if((pa = walkaddr(p->pagetable,va)) == 0){
+      //printf("walkaddr wrong\n");
+      p->killed = 1;
+      goto kill;
+    }
+    memmove(mem,(void*)pa,PGSIZE);
+    if((mappages(p->pagetable,PGROUNDDOWN(va),PGSIZE,(uint64)mem,PTE_R | PTE_W | PTE_X | PTE_U)) == -1){
+      //printf("trap: mappages wrong!\n");
+      kfree(mem);
+      p->killed = 1;
+      goto kill;
+    }
+
+    kfree((void*)pa);
+
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+kill:
   if(p->killed)
     exit(-1);
 
