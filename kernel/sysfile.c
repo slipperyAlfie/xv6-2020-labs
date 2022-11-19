@@ -283,13 +283,48 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+struct inode*
+find_symtarget(char* path, int cnt){
+  if(cnt >= 10){
+    printf("too many times!\n");
+    return 0;
+  }
+  struct inode *ip;
+  char symlink[MAXPATH];
+  memset(symlink,0,MAXPATH);
+
+  if((ip = namei(path)) == 0){
+    printf("wrong path: %s\n",path);
+    return 0;
+  }
+  ilock(ip);
+  if(ip->type == T_DIR){
+    printf("find symlink: dir\n");
+    iunlockput(ip);
+    return 0;
+  }
+  if(ip->type != T_SYMLINK){
+    iunlock(ip);
+    return ip;
+  }
+  
+  if(readi(ip,0,(uint64)symlink,0,MAXPATH) < 0){
+    printf("read symlink: wrong\n");
+    iunlockput(ip);
+    return 0;
+  }
+  iunlockput(ip);
+  return find_symtarget(symlink,cnt+1);
+
+}
+
 uint64
 sys_open(void)
 {
   char path[MAXPATH];
   int fd, omode;
   struct file *f;
-  struct inode *ip;
+  struct inode *ip, *symip;
   int n;
 
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
@@ -308,7 +343,17 @@ sys_open(void)
       end_op();
       return -1;
     }
+    if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){
+      // 找不到链接的目标文件
+      if((symip = find_symtarget(path,0)) == 0){
+        printf("symlink: can't find target\n");
+        end_op();
+        return -1;
+      }
+      ip = symip;
+    }
     ilock(ip);
+
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -483,4 +528,31 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_symlink(void){
+  char target[MAXPATH];
+  memset(target, 0, sizeof(target));
+  char path[MAXPATH];
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0){
+    return -1;
+  }
+  
+  struct inode *ip;
+
+  begin_op();
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  if(writei(ip, 0, (uint64)target, 0, MAXPATH) != MAXPATH){
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;
+
 }
