@@ -40,12 +40,12 @@ _v1(char *p)
   for (i = 0; i < PGSIZE*2; i++) {
     if (i < PGSIZE + (PGSIZE/2)) {
       if (p[i] != 'A') {
-        printf("mismatch at %d, wanted 'A', got 0x%x\n", i, p[i]);
+        printf("mismatch at %p, wanted 'A', got 0x%x\n", i, p[i]);
         err("v1 mismatch (1)");
       }
     } else {
       if (p[i] != 0) {
-        printf("mismatch at %d, wanted zero, got 0x%x\n", i, p[i]);
+        printf("mismatch at %p, wanted zero, got 0x%x\n", i, p[i]);
         err("v1 mismatch (2)");
       }
     }
@@ -114,6 +114,7 @@ mmap_test(void)
   if (p == MAP_FAILED)
     err("mmap (1)");
   _v1(p);
+  // printf("_v1(p) finished\n");
   if (munmap(p, PGSIZE*2) == -1)
     err("munmap (1)");
 
@@ -227,11 +228,14 @@ mmap_test(void)
   close(fd2);
   unlink("mmap2");
 
+  printf("here\n");
+
   if(memcmp(p1, "12345", 5) != 0)
     err("mmap1 mismatch");
+  printf("here\n");
   if(memcmp(p2, "67890", 5) != 0)
     err("mmap2 mismatch");
-
+  printf("here\n");
   munmap(p1, PGSIZE);
   if(memcmp(p2, "67890", 5) != 0)
     err("mmap2 mismatch (2)");
@@ -278,6 +282,7 @@ fork_test(void)
     _v1(p1);
     munmap(p1, PGSIZE); // just the first page
     exit(0); // tell the parent that the mapping looks OK.
+    printf("out here\n");
   }
 
   int status = -1;

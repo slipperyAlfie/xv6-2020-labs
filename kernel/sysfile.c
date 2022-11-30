@@ -16,6 +16,14 @@
 #include "file.h"
 #include "fcntl.h"
 
+#define PROT_NONE       0x0
+#define PROT_READ       0x1
+#define PROT_WRITE      0x2
+#define PROT_EXEC       0x4
+
+#define MAP_SHARED      0x01
+#define MAP_PRIVATE     0x02
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -483,4 +491,158 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64
+sys_mmap(void)
+{
+  // void* mmap(void*, uint, int, int, int, uint);
+  uint64 addr;
+  int prot, flag, fd, sz, offset;
+  struct proc *p = myproc();
+  struct VMA *vma = p->vma + p->vma_id;
+  // points to next vma
+  p->vma_id = (p->vma_id + 1) % 16;
+  if(argaddr(0,&addr) < 0)
+    return -1;
+  if(argint(1,&sz) < 0)
+    return -1;
+  if(argint(2,&prot) < 0)
+    return -1;
+  if(argint(3,&flag) < 0)
+    return -1;
+  if(argint(4,&fd) < 0)
+    return -1;
+  if(argint(5,&offset) < 0)
+    return -1;
+  struct file *f = p->ofile[fd];
+  if(flag == MAP_SHARED && f->writable == 0 && (prot & PROT_WRITE)){
+    printf("MAP_SHARED conflicts with unwritable file\n");
+    return -1;
+  }
+  
+  // choose a virtual address to map file contents
+  if(addr == 0){
+    if(p->vma_start == 0){
+      p->vma_start = MAXVA >> 1;
+    }
+    vma->addr = p->vma_start;
+    p->vma_start = PGROUNDUP(p->vma_start + sz);
+  }
+  else
+    vma->addr = PGROUNDUP(addr);
+  
+  vma->sz = sz;
+  vma->prot = prot;
+  vma->flag = flag;
+  vma->fd = fd;
+  vma->offset = offset;
+  vma->fd_ptr = (uint64)f;
+  int temp = 0, pages = sz % PGSIZE ? sz / PGSIZE + 1 : sz / PGSIZE;
+  while(pages){
+    temp = (temp << 1) + 1;
+    pages--;
+  }
+  vma->pages = temp;
+  printf("mmap: %p  %d\n",vma->addr,(int)(vma - p->vma));
+
+  filedup(f);
+
+  return vma->addr;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr, start, end;
+  int length, i, find = 0, half = 2048, f_off;
+  struct proc *p = myproc();
+  struct VMA *vma;
+  struct file *f;
+  // char buffer[PGSIZE];
+  
+  if(argaddr(0,&addr) < 0)
+    return -1;
+  if(argint(1,&length) < 0)
+    return -1;
+  // find vma
+  for(i = 0 ; i < 16 ; i++){
+    vma = p->vma + i;
+    if(addr >= vma->addr && addr < PGROUNDUP(vma->addr + vma->sz)){
+      find = 1;
+      break;
+    }
+  }
+  if(!find){
+    printf("munmap: no matching vma\n");
+    return -1;
+  }
+  
+  f = (struct file*)vma->fd_ptr;
+  // start and end virtual address to free mmap, page-aligned.
+  // start from the true unremoved mem ***
+  start = PGROUNDDOWN(addr);
+  end = PGROUNDUP(addr + length);
+  // file offset
+  f_off = start - vma->addr;
+
+  while(start < end){
+    // already been removed
+    if((vma->pages & (1 << ((start - vma->addr) / PGSIZE))) == 0){
+      start += PGSIZE;
+      f_off += PGSIZE;
+      continue;
+    }
+
+    // write back to file, half page by half page
+    // printf("%d  %d  %d\n",vma->flag, MAP_SHARED, vma->flag & MAP_SHARED);
+
+    if(vma->flag == MAP_SHARED){
+      // printf("in\n");
+      int dirty = check_dirty(p->pagetable, start);
+      if(dirty < 0){
+        printf("munmap: page doesn't exist\n");
+        return -1;
+      }
+      else if(dirty > 0){
+        begin_op();
+        ilock(f->ip);
+        writei(f->ip, 1, start, f_off + vma->offset, PGSIZE >> 1);
+        f_off += half;
+        start += half;
+        iunlock(f->ip);
+        end_op();
+
+        begin_op();
+        ilock(f->ip);
+        writei(f->ip, 1, start, f_off + vma->offset, PGSIZE >> 1);
+        f_off += half;
+        start += half;
+        iunlock(f->ip);
+        end_op();
+        vma->pages &= ~(1 << ((start - PGSIZE - vma->addr) / PGSIZE));
+        uvmunmap(p->pagetable,start - PGSIZE,1,1);
+        continue;
+      }
+    }
+    if(check_mapped(p->pagetable,start)){
+      printf("here\n");
+      uvmunmap(p->pagetable,start,1,1);
+      printf("out\n");
+    }
+    vma->pages &= ~(1 << ((start - vma->addr) / PGSIZE));
+    start += PGSIZE;
+    f_off += PGSIZE;
+  }
+
+  // printf("uvmunmap finished\n");
+  if(vma->pages == 0){
+    filefree(f);
+    memset(vma,0,sizeof(struct VMA));
+    p->vma_id = vma - p->vma;
+    printf("vma%d is done\n",p->vma_id);
+  }
+  
+  return 0;
+  
 }

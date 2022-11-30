@@ -29,6 +29,7 @@ int             exec(char*, char**);
 struct file*    filealloc(void);
 void            fileclose(struct file*);
 struct file*    filedup(struct file*);
+struct file*    filefree(struct file*);
 void            fileinit(void);
 int             fileread(struct file*, uint64, int n);
 int             filestat(struct file*, uint64 addr);
@@ -171,6 +172,9 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+int             check_dirty(pagetable_t, uint64);
+int             check_mapped(pagetable_t, uint64);
+int             uvmcopy_mmap(pagetable_t, pagetable_t, uint64, uint64);
 
 // plic.c
 void            plicinit(void);

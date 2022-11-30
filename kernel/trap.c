@@ -2,7 +2,10 @@
 #include "param.h"
 #include "memlayout.h"
 #include "riscv.h"
+#include "fs.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
 #include "proc.h"
 #include "defs.h"
 
@@ -67,11 +70,61 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 13 || r_scause() == 15){
+    // lazy allocation for mmap
+    uint64 pa, va = r_stval();
+    int find = 0, i, f_off = 0;
+    struct VMA *vma;
+    struct file *f;
+    // find vma
+    for(i = 0 ; i < 16 ; i++){
+      vma = p->vma + i;
+      if(va >= vma->addr && va < PGROUNDUP(vma->addr + vma->sz)){
+        find = 1;
+        break;
+      }
+    }
+    if(!find){
+      printf("page fault: no matching vma\n");
+      p->killed = 1;
+      goto kill;
+    }
+    printf("trap: find vma: %d\n",i);
+    int start = (va - vma->addr) / PGSIZE;
+    if((vma->pages & (1 << start)) == 0){
+      printf("this page has been removed %p\n", va);
+      p->killed = 1;
+      goto kill;
+    }
+
+    f = (struct file*)(vma->fd_ptr);
+    if((pa = (uint64)kalloc()) == 0){
+      printf("page fault: no physical mem\n");
+      p->killed = 1;
+      goto kill;
+    }
+    memset((void*)pa,0,PGSIZE);
+    if(mappages(p->pagetable,PGROUNDDOWN(va),PGSIZE,pa,PTE_U | PTE_R | PTE_W | PTE_X) != 0){
+      printf("page fault: mappages\n");
+      kfree((void*)pa);
+      p->killed = 1;
+      goto kill;
+    }
+    // file offset to start copying
+    f_off = PGROUNDDOWN(va) - vma->addr;
+    ilock(f->ip);
+    readi(f->ip,1,PGROUNDDOWN(va),f_off + vma->offset, PGSIZE);
+    iunlock(f->ip);
+    // printf("page fault: allocation complete\n");
+    // printf("allocate: va: %p, vma->addr: %p\n",PGROUNDDOWN(va), vma->addr);
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
+
+  kill:
 
   if(p->killed)
     exit(-1);

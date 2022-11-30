@@ -97,6 +97,22 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   return &pagetable[PX(0, va)];
 }
 
+int
+check_dirty(pagetable_t pagetable, uint64 va){
+  pte_t *pte = walk(pagetable,va,0);
+  if(pte == 0){
+    // this page doesn't exist
+    return -1;
+  }
+  return *pte & PTE_D; 
+}
+
+int
+check_mapped(pagetable_t pagetable, uint64 va){
+  pte_t *pte = walk(pagetable,va,0);
+  return pte && (*pte & PTE_V); 
+}
+
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
@@ -321,6 +337,40 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 
  err:
   uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+
+int
+uvmcopy_mmap(pagetable_t old, pagetable_t new, uint64 addr, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  char *mem;
+
+  for(i = addr; i < addr + sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0){
+      printf("uvmcopy_mmap: pte doesn't exist\n");
+      continue;
+    }
+    if((*pte & PTE_V) == 0){
+      printf("uvmcopy_mmap: pte doesn't valid\n");
+      continue;
+    }
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+    if((mem = kalloc()) == 0)
+      goto err;
+    memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+      kfree(mem);
+      goto err;
+    }
+  }
+  return 0;
+
+ err:
+  uvmunmap(new, addr, (i - addr) / PGSIZE, 1);
   return -1;
 }
 

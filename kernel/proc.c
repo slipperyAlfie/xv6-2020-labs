@@ -280,6 +280,16 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  // Copy mmap region
+  for(i = 0 ; i < 16 ; i++){
+    struct VMA *vma = p->vma + i;
+    if(vma->addr)
+      uvmcopy_mmap(p->pagetable,np->pagetable,vma->addr,vma->sz);
+  }
+  np->vma_id = p->vma_id;
+  np->vma_start = p->vma_start;
+  memmove(np->vma,p->vma,16*sizeof(struct VMA));
+
   np->sz = p->sz;
 
   np->parent = p;
@@ -382,6 +392,20 @@ exit(int status)
   acquire(&original_parent->lock);
 
   acquire(&p->lock);
+  
+  // clear mmap
+  for(int i = 0 ; i < 16 ; i++){
+    uint64 addr = p->vma[i].addr;
+    if(addr){
+      for(uint64 cur = addr ; cur < addr + p->vma[i].sz ; cur += PGSIZE){
+        if(check_mapped(p->pagetable,cur))
+          uvmunmap(p->pagetable,cur,1,1);
+      }
+      memset(p->vma + i, 0, sizeof(struct VMA));
+    }
+  }
+  p->vma_id = 0;
+  p->vma_start = 0;
 
   // Give any children to init.
   reparent(p);
